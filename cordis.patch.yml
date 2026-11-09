@@ -1,0 +1,11 @@
+# Bundle patch for dsh-optimizer (DSH 智能优化管家).
+#
+# Declaring `dsh.bundle.patch` in package.json makes this package a PROFILE
+# LAYER: DSH reconciles `dsh.profile.bundles` against installed dependencies
+# and applies this patch on top of the profile root. The single row below
+# mounts the Host half (ledger, budgets, checkpoint, tool-result shaper, JSON
+# routes) and, through the package's `dsh.client` declaration, the browser
+# half in the settings page and the sidebar footer.
+- insert:
+    - id: dsh-optimizer
+      name: dsh-optimizer

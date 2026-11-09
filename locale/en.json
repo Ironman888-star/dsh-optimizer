@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Optimizer",
+    "description": "Local context, token and API-cost guardian for DSH: usage ledger, cache-hit and anomaly detection, context budgets, tool-result slimming, task checkpoints. Runs entirely on this machine with no extra cloud calls."
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "name": "dsh-optimizer",
+  "version": "0.3.6",
+  "description": "Unofficial DeepSeek Harness plugin: local token/cost estimates, safe context packing by recent turns, and editable task guidance.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon.svg": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "docs",
+    "README.md",
+    "README.en.md",
+    "RELEASE_NOTES_v0.3.6.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "PRIVACY.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js && node --check client.js && node --check lib/host.js && node --check lib/server.js && node --check lib/context-packing.js && node --check lib/task-instructions.js",
+    "release:audit": "node scripts/release-audit.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "token",
+    "cost",
+    "context",
+    "observability",
+    "context-packing",
+    "task-instructions",
+    "deepseek",
+    "dsh-optimizer"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

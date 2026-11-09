@@ -1,0 +1,34 @@
+# Local dependencies and build outputs
+node_modules/
+coverage/
+.nyc_output/
+dist/
+*.tgz
+*.zip
+site/
+.plugin-market-cache/
+
+# Runtime data and private configuration (must never be committed)
+.dsh/
+storages/
+config.json
+config.local.json
+*.local.json
+.env
+.env.*
+!.env.example
+ledger/
+checkpoints/
+spill/
+reports/
+logs/
+state/
+tmp/
+anomalies.jsonl
+*.log
+
+# System/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

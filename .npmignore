@@ -1,0 +1,11 @@
+.github/
+market/
+scripts/
+tests/
+README.en.md
+CONTRIBUTING.md
+SECURITY.md
+PRIVACY.md
+CHANGELOG.md
+*.zip
+*.log
