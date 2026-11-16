@@ -6,7 +6,7 @@
 
 - 已有 DSH Desktop。已报告的实机宿主为 `2.0.21-next`；其他宿主版本请先在隔离 profile 测试。
 - 本仓库目录内有 `package.json`、`cordis.patch.yml`、`index.js`、`client.js` 和 `lib/`。
-- Node.js 20+ 可供本地测试；实际加载依赖目标 DSH 宿主。
+- Node.js 22+ 可供本地测试；实际加载依赖目标 DSH 宿主。
 - 备份目前的插件目录、`<DSH_HOME>/storages/dsh-optimizer/` 和重要会话目录。`<DSH_HOME>` 常由 DSH 配置或用户目录决定；不要假定公开示例路径与你一致。
 
 ## 安装渠道
@@ -24,7 +24,7 @@ dsh plugin --profile desktop add .
 
 ## 首次使用检查
 
-1. 重启/刷新 DSH（按插件管理器提示），打开「设置 → 智能优化管家」，版本显示 **v0.3.6**，日志可见 `boot v0.3.6`。
+1. 重启/刷新 DSH（按插件管理器提示），打开「设置 → 智能优化管家」，应显示 **v0.3.7**，日志可见 `boot v0.3.7`。
 2. 默认上下文打包为 **关闭**，保留轮数默认 **3**；可设置 1–20，开关点击即保存。升级安装时会保留本机已有配置。
 3. 任务指令编辑区能保存并重新读取；后续系统提示词应出现预期指导段落。**不要把含秘密的真实提示词上传公开 issue**。
 4. 用新建的测试会话进行多轮对话、少量工具调用，确认可重启重载；如开启上下文打包，检查每条新替换标记都有 `data.id`。
@@ -34,3 +34,7 @@ dsh plugin --profile desktop add .
 **重要：** 旧的“禁止 DSH 主动回顾历史会话和扫描工作区”权限管理面板不再存在。本插件不提供文件操作的审批与访问沙箱。
 
 See also: [upgrading & recovery](upgrade.md), [context packing](context-packing.md), [privacy](../PRIVACY.md).
+
+## 消息删除功能（v0.3.7 正式）
+
+本测试版内置 MIT 授权的 `dsh-delete-turn` v0.2.7。旧自研删除模块不再存在。请勿同时安装同名独立插件，先在隔离 profile 上验收用户消息、助手回复、工具步骤、整轮、多选、刷新和 V4 冷读。详见 [测试指南](turn-delete-beta.md)。

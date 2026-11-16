@@ -1,7 +1,7 @@
 {
   "name": "dsh-optimizer",
-  "version": "0.3.6",
-  "description": "Unofficial DeepSeek Harness plugin: local token/cost estimates, safe context packing by recent turns, and editable task guidance.",
+  "version": "0.3.7",
+  "description": "Unofficial DeepSeek Harness plugin: local cost/token insights, recent-turn context packing, editable task instructions, and integrated dsh-delete-turn v0.2.7 message/turn deletion.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -26,15 +26,22 @@
     "CHANGELOG.md",
     "LICENSE",
     "PRIVACY.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "vendor/dsh-delete-turn",
+    "THIRD_PARTY_NOTICES.md",
+    "RELEASE_NOTES_v0.3.7-beta.2.md",
+    "RELEASE_NOTES_v0.3.7-beta.3.md",
+    "RELEASE_NOTES_v0.3.7.md",
+    "SOURCE_INTEGRITY.sha256"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
-    "test": "node --test",
-    "check": "node --check index.js && node --check client.js && node --check lib/host.js && node --check lib/server.js && node --check lib/context-packing.js && node --check lib/task-instructions.js",
-    "release:audit": "node scripts/release-audit.mjs"
+    "test": "node --test tests/*.test.js vendor/dsh-delete-turn/test/button-timing.test.js vendor/dsh-delete-turn/test/client.test.js vendor/dsh-delete-turn/test/host.test.js vendor/dsh-delete-turn/test/logic.test.js",
+    "check": "node --check index.js && node --check client.js && node --check lib/host.js && node --check lib/server.js && node --check lib/context-packing.js && node --check lib/task-instructions.js && node --check vendor/dsh-delete-turn/src/index.js && node --check vendor/dsh-delete-turn/src/client.js && npm run verify:vendor",
+    "release:audit": "node scripts/release-audit.mjs",
+    "verify:vendor": "node scripts/verify-vendor-client.mjs"
   },
   "keywords": [
     "dsh",
@@ -45,6 +52,7 @@
     "context",
     "observability",
     "context-packing",
+    "turn-deletion",
     "task-instructions",
     "deepseek",
     "dsh-optimizer"

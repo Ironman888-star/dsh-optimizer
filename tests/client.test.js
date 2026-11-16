@@ -5,7 +5,7 @@
  * `window.__ModuleLoader__.load({id, factory(require)})` row that the shell
  * executes. A plain `import` would therefore fail, so this test reproduces the
  * loader handshake with a stub `window` + `require` and asserts the plugin
- * registers exactly the two slots it advertises.
+ * registers its settings, sidebar, and turn management slots.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,6 +35,8 @@ function loadClient(options = {}) {
 
   const requireStub = (id) => {
     if (id === 'react') return React
+    if (id === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' }
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') return { Checkbox: 'checkbox', Button: 'button', Modal: 'modal' }
     throw new Error(`unexpected platform module: ${id}`)
   }
   const window = {
@@ -45,8 +47,11 @@ function loadClient(options = {}) {
       },
     },
   }
+  Object.assign(window, options.window ?? {})
   // eslint-disable-next-line no-new-func
-  new Function('window', source)(window)
+  new Function('window', 'fetch', 'CustomEvent', source)(window,
+    options.fetch ?? ((...args) => globalThis.fetch(...args)),
+    class CustomEvent { constructor(type, options) { this.type = type; this.detail = options?.detail } })
   return { loaded, React }
 }
 
@@ -59,36 +64,37 @@ test('client: registers itself through window.__ModuleLoader__ exactly once', ()
 test('client: declares slots inject and an apply function', () => {
   const { loaded } = loadClient()
   const mod = loaded[0].exports
-  assert.deepEqual(mod.inject, ['slots'])
+  assert.deepEqual(mod.inject, ['slots', 'locale'])
   assert.equal(typeof mod.apply, 'function')
 })
 
-test('client: apply seats the settings page and the sidebar readout', () => {
+test('client: registers optimizer page and original vendor delete slots once', () => {
   const { loaded } = loadClient()
-  const injected = []
-  const registrations = []
+  const injected = [], registrations = []
   const ctx = {
+    locale: { register: () => () => {} },
+    effect: (fn) => fn(),
     slots: {
       inject: (slot, factory) => { injected.push(slot); factory() },
       register: (spec, component) => { registrations.push({ spec, component }); return () => {} },
     },
   }
   loaded[0].exports.apply(ctx)
-
-  assert.deepEqual(injected, ['settings.section', 'sidebar.footer.action'])
-  assert.equal(registrations.length, 2)
-
-  const [page, readout] = registrations
-  assert.equal(page.spec.name, 'settings.section')
-  assert.equal(page.spec.id, 'dsh-optimizer')
-  assert.equal(typeof page.spec.order, 'number')
-  assert.equal(typeof page.component, 'function')
-  assert.equal(page.spec.label(), '智能优化管家')
-
-  assert.equal(readout.spec.name, 'sidebar.footer.action')
-  assert.equal(readout.spec.id, 'dsh-optimizer')
-  assert.equal(typeof readout.component, 'function')
-  assert.notEqual(readout.spec.order, page.spec.order, 'sidebar order stays independent from the page order')
+  assert.deepEqual(injected, [
+    'settings.section', 'conversation.chat.assistant-actions',
+    'conversation.session.header.utilities', 'conversation.input.overlay',
+    'sidebar.footer.action',
+  ])
+  assert.equal(registrations.length, 5)
+  assert.equal(registrations.filter(row => row.spec.name === 'conversation.chat.assistant-actions').length, 1)
+  assert.equal(registrations.filter(row => row.spec.name === 'conversation.session.header.utilities').length, 1)
+  assert.equal(registrations.filter(row => row.spec.name === 'conversation.input.overlay').length, 1)
+  assert.equal(registrations.filter(row => row.spec.name === 'settings.section').length, 1)
+  assert.equal(registrations.filter(row => row.spec.name === 'sidebar.footer.action').length, 1)
+  assert.ok(source.includes('function makeVendoredDeleteClient'))
+  assert.ok(source.includes('删除这一轮'))
+  assert.ok(!source.includes('dsh-optimizer-delete-turn'))
+  assert.ok(!source.includes('TURN_CHANGE_EVENT'))
 })
 
 test('client: both components tolerate being called with only owner props', () => {
@@ -159,3 +165,5 @@ test('client: settings panel contains direct-save packing switch and editable ta
   assert.ok(source.includes('保存任务指令'))
   assert.ok(!source.includes('禁止 DSH 主动回顾历史会话和扫描工作区'))
 })
+
+

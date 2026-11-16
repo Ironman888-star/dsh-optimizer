@@ -111,13 +111,20 @@ test('budget: scopes report ratios against configured limits', () => {
 })
 
 test('budget: warn threshold raises one alert per day, not one per call', () => {
-  const core = makeCore({ config: { 'budgets.dailyUSD': 0.001, 'budgets.warnRatio': 0.4 } })
+  // Pin the billing instant and size the budget from the current pricing catalog.
+  // A fixed $0.001 cap can enter "over" during peak pricing and never emit "warn".
+  const at = new Date('2026-11-16T00:30:00Z')
+  const core = makeCore({ now: () => at, config: { 'budgets.warnRatio': 0.4 } })
+  const perCall = core.pricing.estimateRequest({
+    provider: 'deepseek-account', model: 'deepseek-flash', usage, at,
+  }).costUSD
+  core.config.set('budgets.dailyUSD', perCall * 4)
   const ctx = makeCtx()
   core.ledger.attach(ctx)
   core.budget.attach()
   for (let i = 0; i < 3; i += 1) {
-    ctx.emit('session/event', session('s'), headerEvent({ seq: i }))
-    ctx.emit('session/event', session('s'), assistantEvent(usage, { seq: 20 + i }))
+    ctx.emit('session/event', session('s'), headerEvent({ seq: i, time: at.getTime() }))
+    ctx.emit('session/event', session('s'), assistantEvent(usage, { seq: 20 + i, time: at.getTime() }))
   }
   const warnings = core.anomaly.snapshot().recent.filter((item) => item.kind === 'budget' && item.severity === 'warn')
   assert.equal(warnings.length, 1)

@@ -5,6 +5,7 @@ labels: bug
 ---
 
 **Plugin and host versions / 版本：**
+
 **Steps using synthetic data / 可复现步骤：**
 
 **Expected vs. actual / 预期与实际：**

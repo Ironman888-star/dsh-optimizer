@@ -16,12 +16,13 @@ function boot(options = {}) {
 
 test('integration: a boot mounts every route and every module', () => {
   const { ctx, host } = boot()
-  assert.equal(ctx.routes.size, 7)
+  assert.equal(ctx.routes.size, 10)
   const modules = host.status().modules
   const byId = Object.fromEntries(modules.map((item) => [item.id, item.state]))
   assert.equal(byId.server, 'mounted')
   assert.equal(byId.taskInstructions, 'mounted')
   assert.equal(byId.accessGuard, undefined)
+  assert.equal(byId.messageDelete, 'mounted')
   assert.equal(byId.ledger, 'mounted')
   assert.equal(byId.anomaly, 'mounted')
   assert.equal(byId.toolResult, 'mounted')
@@ -98,7 +99,7 @@ test('integration: a disabled plugin still serves status but stops optimizing', 
   const modules = Object.fromEntries(host.status().modules.map((item) => [item.id, item.state]))
   assert.equal(modules.server, 'mounted')
   assert.equal(modules.ledger, undefined, 'optimizers must not mount while disabled')
-  assert.equal(ctx.routes.size, 7, 'status/config routes stay reachable so the owner can re-enable')
+  assert.equal(ctx.routes.size, 10, 'status/config routes stay reachable so the owner can re-enable')
 
   ctx.emit('session/event', session('s'), headerEvent())
   ctx.emit('session/event', session('s'), assistantEvent({ inputTokens: 1000, outputTokens: 100 }))

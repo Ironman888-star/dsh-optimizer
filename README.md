@@ -6,15 +6,19 @@
 
 > 本项目 **不是 DSH / DeepSeek 官方插件**。它不会保证任何固定百分比的 Token 或费用节省。插件自身的本地统计及裁剪不主动调用额外云端模型，但正常 DSH 请求仍由你配置的模型服务处理。
 >
+> **正式功能（v0.3.7）：** 将原作者 **DDDMUC/dsh-delete-turn v0.2.7** 的[消息与整轮删除功能](docs/turn-delete-beta.md)完整集成进本插件（单消息、步骤、回复、整轮、批量删除和排队消息撤回）。旧自研删除模块已移除，原始日志保留。**v0.3.7 已完成桌面端六项实机验收（界面、整轮删除、刷新/重启持久化、与上下文打包联动、V4 冷重载、原功能回归），可替代 v0.3.6。**
+>
+> **已知问题（宿主侧，非本插件）：** 在**纯 Web 客户端**（浏览器访问 DSH Web）打开会话时，宿主 `conversation.session` 插槽可能报 `TypeError: text.replace is not a function at DraftEditorRuntime.setDraft` 导致消息区空白。DSH 桌面端（Electron）同版本同插件组合不复现，且不影响删除按钮、确认弹窗与发送；已在 v0.3.7 发布决策中作为已知问题接受。
+>
 > **v0.3.6 重要修复：** v0.3.5 的上下文替换标记缺少 `data.id`，可能导致会话重启后校验失败。请勿安装已知存在此缺陷的 v0.3.5。升级 v0.3.6 **不自动修复**已经损坏的会话文件，见[故障说明](docs/session-identity-fix.md)。
 
 | 项目 | 说明 |
 |---|---|
 | 插件包名 / ID | `dsh-optimizer` |
-| 当前源码版本 | **0.3.6** |
+| 当前开发源码版本 | **0.3.7**（正式版；v0.3.6 为上一稳定版） |
 | 许可证 | MIT（[LICENSE](LICENSE)，正式发布前请核实所有源码的授权） |
 | 兼容性实测 | DSH Desktop `2.0.21-next`；其他 DSH 版本尚未验证 |
-| 开发与测试 | Node.js ≥ 20；本地 Node 22 测试 **131/131** 通过 |
+| 开发与测试 | Node.js ≥ 22；本地 Node 22 自动化测试通过；真实 DSH 的删除功能仍需测试 |
 | 插件运行数据 | `<DSH_HOME>/storages/dsh-optimizer`，不属于本仓库 |
 
 ## 核心能力
@@ -24,6 +28,8 @@
 - **任务指令改写**：可在设置页编辑、保存和恢复预置任务指令；内容保存在本机配置中，并由 DSH `systemPrompt.section()` 供后续模型请求使用。该功能是行为指导，**不是文件系统权限限制**。
 - **工具结果、检查点和异常**：在 `enforce` 模式下可根据配置精简工具输出；默认 `audit` 模式只观察不改写相关输出；检查点和异常监测按现有配置执行。
 - **本地仪表盘**：配置、诊断报告和用量摘要。
+
+**请勿在同一 profile 单独安装 `dsh-delete-turn`，以免重叠路由和重复按钮。** 删除请求访问本机 HTTP 接口，但不构成主人身份认证。
 
 旧的“禁止 DSH 主动回顾历史会话和扫描工作区”权限审批功能已在 v0.3.5 移除，**本插件不控制 DSH 的文件访问权限**。
 
@@ -36,7 +42,7 @@
 dsh plugin --profile desktop add .
 ```
 
-确认来源与版本后批准安装、按需重启 DSH，然后在「设置 → 智能优化管家」查看版本 `v0.3.6`。新版开关**不会替你自动开启**。请先在测试会话里检查工具消息、历史裁剪和重启恢复；详情见 [安装手册](docs/install.md)。
+确认来源与版本后批准安装、按需重启 DSH，然后在「设置 → 智能优化管家」查看版本 `v0.3.7`。新版开关**不会替你自动开启**。请先在测试会话里检查工具消息、历史裁剪和重启恢复；详情见 [安装手册](docs/install.md)。
 
 ### 从 v0.3.5 升级
 
@@ -66,3 +72,7 @@ npm pack --dry-run
 [安装](docs/install.md) · [GitHub 发布](docs/github-publish.md) · [配置](docs/configuration.md) · [上下文打包](docs/context-packing.md) · [任务指令](docs/task-instructions.md) · [升级/回滚](docs/upgrade.md) · [FAQ](docs/faq.md) · [发布记录](CHANGELOG.md) · [修复说明](docs/session-identity-fix.md) · [实机验收摘要](docs/field-validation.md) · [贡献指南](CONTRIBUTING.md) · [市场索引](market/README.md)
 
 发布前请确认所有源文件的版权与再许可权限。贡献和问题报告请先脱敏。
+
+## 第三方代码授权
+
+删除功能基于 [DDDMUC/dsh-delete-turn](https://github.com/DDDMUC/dsh-delete-turn) v0.2.7，保留原作者 MIT 许可与署名，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本测试构建未替代已经通过实机验收的 v0.3.6。

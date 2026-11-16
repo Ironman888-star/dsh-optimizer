@@ -1,0 +1,569 @@
+import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
+import test from 'node:test'
+import { adapterDropsEmptyUserContentFor, apply, configureStopWait, providerOf, silentCarrierFor } from '../src/index.js'
+import { foldSurface, planRange } from '../src/logic.js'
+
+const SESSION_ID = 'session-11111111-1111-1111-1111-111111111111'
+
+// One closed turn whose surface is [system head, human prompt].
+function buildEvents() {
+  return [
+    { seq: 0, time: 1, type: 'turn/start', data: { turn: 1 } },
+    { seq: 1, time: 2, type: 'step/start', data: { turn: 1, step: 1 } },
+    {
+      seq: 2,
+      time: 3,
+      type: 'system/message',
+      data: { turn: 1, step: 1, message: { id: 'sys-1', role: 'system', content: [{ type: 'text', text: 'sys' }], source: { kind: 'plugin', plugin: 'test' } } },
+      surfaceOp: 'append',
+    },
+    {
+      seq: 3,
+      time: 4,
+      type: 'user/message',
+      data: { id: 'u-1', role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } },
+      surfaceOp: 'append',
+    },
+    { seq: 4, time: 5, type: 'turn/end', data: { turn: 1 } },
+  ]
+}
+
+function harness(events, options = {}) {
+  const calls = { appends: [], routes: new Map() }
+  const session = {
+    surface: { nodes: foldSurface(events).nodes },
+    append(type, data, intent) {
+      if (options.failOn === type) throw new Error('the surface refused')
+      const entry = { type, data, intent }
+      calls.appends.push(entry)
+      return { seq: events.length, time: 99, type, data, ...intent }
+    },
+  }
+  const webServer = {
+    register(spec) {
+      calls.routes.set(spec.path, spec)
+      return () => {}
+    },
+  }
+  const ctx = {
+    effect(fn) {
+      return fn()
+    },
+    inject() {},
+    get(name) {
+      if (name === 'webServer') return webServer
+      if (name === 'sessions') return { get: () => session, flush: async () => true }
+      if (name === 'sessionQuery') return { readSession: async () => ({ events }) }
+      return undefined
+    },
+  }
+  return { ctx, calls }
+}
+
+function fakeReq(body) {
+  const req = new EventEmitter()
+  req.method = 'POST'
+  req.url = '/dsh-delete-turn/delete'
+  req.socket = { remoteAddress: '127.0.0.1' }
+  req.headers = { host: '127.0.0.1:3080', 'content-type': 'application/json' }
+  process.nextTick(() => {
+    req.emit('data', Buffer.from(JSON.stringify(body)))
+    req.emit('end')
+  })
+  return req
+}
+
+function fakeRes() {
+  return {
+    statusCode: 0,
+    body: '',
+    writeHead(code) {
+      this.statusCode = code
+    },
+    end(payload) {
+      this.body = payload
+    },
+  }
+}
+
+test('the carrier shape follows the adapter serving this session', () => {
+  const events = [
+    { type: 'model/selection', seq: 1, data: { provider: 'pi-ai', model: 'x' } },
+    { type: 'request/header', seq: 2, data: { header: { config: { provider: 'deepseek-account' } } } },
+    { type: 'model/selection', seq: 3, data: { provider: 'deepseek-account', model: 'deepseek-flash' } },
+  ]
+  assert.equal(providerOf(events), 'deepseek-account', 'the last named provider wins')
+  assert.equal(providerOf([{ type: 'request/header', seq: 1, data: { header: { config: { provider: 'from-header' } } } }]), 'from-header')
+  assert.equal(providerOf([]), null)
+
+  const deepseekLike = { providerInfo: () => ({}), resolveImageAccess: () => '', prepareExtensions: () => ({}) }
+  const piAiLike = { providerInfo: () => ({}), resolveImageAccess: () => '' }
+  const llm = { adapters: new Map([['deepseek-account', { adapter: deepseekLike }], ['pi-ai', { adapter: piAiLike }]]) }
+  const ctx = { get: (name) => (name === 'llm' ? llm : undefined) }
+
+  assert.equal(adapterDropsEmptyUserContentFor(ctx, 'deepseek-account'), true, 'the DeepSeek adapter drops it natively')
+  assert.equal(adapterDropsEmptyUserContentFor(ctx, 'pi-ai'), false, 'pi-ai without the marker is not proven')
+  assert.equal(adapterDropsEmptyUserContentFor(ctx, 'unknown'), false)
+  assert.equal(adapterDropsEmptyUserContentFor({ get: () => undefined }, 'deepseek-account'), false, 'no registry means no proof')
+
+  assert.equal(silentCarrierFor(ctx, events), true, 'a DeepSeek-adapter session gets the empty carrier')
+  assert.equal(silentCarrierFor(ctx, [{ type: 'model/selection', seq: 1, data: { provider: 'pi-ai' } }]), false, 'an unproven session keeps the zero-width carrier')
+})
+
+test('the delete route appends a single turn-less carrier', async () => {
+  const events = buildEvents()
+  const { ctx, calls } = harness(events)
+  apply(ctx)
+  const route = calls.routes.get('/dsh-delete-turn/delete')
+  assert.ok(route, 'the delete route must be registered')
+
+  const res = fakeRes()
+  await route.handler(fakeReq({ sessionId: SESSION_ID, mode: 'message', seq: 3 }), res)
+  const payload = JSON.parse(res.body)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(payload.ok, true)
+  assert.deepEqual(payload.hidden, [{ seq: 3, mode: 'message' }])
+
+  // A synthetic turn+step must never be opened here: the agent loop counts only
+  // the turns it opens itself, so the next real turn would reuse the number and
+  // corrupt the log. The carrier is a turn-less user/message holding a single
+  // zero-width space (empty content is gateway-rejected).
+  assert.equal(calls.appends.length, 1)
+  const [carrier] = calls.appends
+  assert.equal(carrier.type, 'user/message')
+  assert.deepEqual(carrier.data.content, [{ type: 'text', text: '\u200b' }])
+  assert.deepEqual(carrier.data.source, { kind: 'plugin:dsh-delete-turn', op: 'delete', turn: 1 })
+  assert.deepEqual(carrier.intent.surfaceOp, { op: 'replace', startSeq: 3, endSeq: 3 })
+  assert.deepEqual(carrier.intent.sourceEventSeqs, [3])
+  assert.equal(payload.replacementSeq, 5)
+})
+
+test('an own carrier on the surface can be deleted again with mode message', () => {
+  const carrier = {
+    seq: 5,
+    time: 6,
+    type: 'user/message',
+    data: { id: 'del-1', role: 'user', content: [{ type: 'text', text: '[deleted]' }], source: { kind: 'plugin', plugin: 'dsh-delete-turn' } },
+    surfaceOp: { op: 'replace', startSeq: 3, endSeq: 3 },
+    sourceEventSeqs: [3],
+  }
+  const events = [...buildEvents(), carrier]
+  const nodes = foldSurface(events).nodes
+  assert.deepEqual(nodes, [2, 5])
+  const plan = planRange(events, nodes, { mode: 'message', seq: 5 })
+  assert.deepEqual(plan.shadowed, [5])
+})
+
+// A three-turn transcript, so a batch can hold two windows that are NOT
+// neighbours (turn 2 sits between them) as well as two that are.
+function buildThreeTurns() {
+  const events = []
+  const push = (type, data, extra = {}) => events.push({ seq: events.length, time: events.length + 1, type, data, ...extra })
+  const prompt = (id, text) => ({ id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+  for (const turn of [1, 2, 3]) {
+    push('turn/start', { turn })
+    push('step/start', { turn, step: 1 })
+    if (turn === 1) {
+      push(
+        'system/message',
+        {
+          turn,
+          step: 1,
+          message: { id: 'sys-1', role: 'system', content: [{ type: 'text', text: 'sys' }], source: { kind: 'plugin', plugin: 'test' } },
+        },
+        { surfaceOp: 'append' },
+      )
+    }
+    push('user/message', prompt('u-' + turn, 'turn ' + turn), { surfaceOp: 'append' })
+    push('turn/end', { turn })
+  }
+  return events
+}
+
+test('a batch lands one carrier per window, all of them or none', async () => {
+  const events = buildThreeTurns()
+  const { ctx, calls } = harness(events)
+  apply(ctx)
+  const route = calls.routes.get('/dsh-delete-turn/delete')
+  assert.ok(route, 'the delete route must be registered')
+
+  const res = fakeRes()
+  await route.handler(fakeReq({ sessionId: SESSION_ID, targets: [{ mode: 'turn', seq: 3 }, { mode: 'turn', seq: 11 }] }), res)
+  const payload = JSON.parse(res.body)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(payload.ok, true)
+  assert.equal(calls.appends.length, 2, 'turn 1 and turn 3 are not neighbours')
+  assert.deepEqual(
+    calls.appends.map((entry) => entry.intent.surfaceOp),
+    [
+      { op: 'replace', startSeq: 3, endSeq: 3 },
+      { op: 'replace', startSeq: 11, endSeq: 11 },
+    ],
+    'windows land in surface order',
+  )
+  assert.equal(payload.replacements.length, 2)
+  assert.equal(payload.replacementSeq, payload.replacements[1])
+  assert.deepEqual(payload.hidden, [
+    { seq: 3, mode: 'turn' },
+    { seq: 11, mode: 'turn' },
+  ])
+})
+
+test('a batch of neighbouring turns is ONE range replace', async () => {
+  const events = buildThreeTurns()
+  const { ctx, calls } = harness(events)
+  apply(ctx)
+  const route = calls.routes.get('/dsh-delete-turn/delete')
+
+  const res = fakeRes()
+  await route.handler(fakeReq({ sessionId: SESSION_ID, targets: [{ mode: 'turn', seq: 3 }, { mode: 'turn', seq: 7 }] }), res)
+  const payload = JSON.parse(res.body)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(calls.appends.length, 1, 'adjacent windows fuse into one replacement')
+  assert.deepEqual(calls.appends[0].intent.surfaceOp, { op: 'replace', startSeq: 3, endSeq: 7 })
+  assert.deepEqual(calls.appends[0].intent.sourceEventSeqs, [3, 7])
+  assert.deepEqual(payload.hidden, [
+    { seq: 3, mode: 'batch' },
+    { seq: 7, mode: 'batch' },
+  ])
+  assert.equal(payload.replacements, undefined, 'a single window keeps the one-target shape')
+})
+
+test('an empty batch is refused before anything is appended', async () => {
+  const events = buildThreeTurns()
+  const { ctx, calls } = harness(events)
+  apply(ctx)
+  const route = calls.routes.get('/dsh-delete-turn/delete')
+  const res = fakeRes()
+  await route.handler(fakeReq({ sessionId: SESSION_ID, targets: [] }), res)
+  assert.equal(res.statusCode, 400)
+  assert.equal(JSON.parse(res.body).code, 'invalid')
+  assert.equal(calls.appends.length, 0)
+})
+
+function fakeGet(url) {
+  const req = new EventEmitter()
+  req.method = 'GET'
+  req.url = url
+  req.socket = { remoteAddress: '127.0.0.1' }
+  req.headers = { host: '127.0.0.1:3080', accept: 'application/json' }
+  return req
+}
+
+test('the state route reports deletion bookkeeping turns', async () => {
+  const carrier = {
+    seq: 5,
+    time: 6,
+    type: 'system/message',
+    data: {
+      turn: 2,
+      step: 1,
+      message: { id: 'del-1', role: 'system', content: [], source: { kind: 'system-prompt', plugin: 'dsh-delete-turn' } },
+    },
+    surfaceOp: { op: 'replace', startSeq: 3, endSeq: 3 },
+    sourceEventSeqs: [3],
+  }
+  const events = [...buildEvents(), carrier]
+  const { ctx, calls } = harness(events)
+  apply(ctx)
+  const route = calls.routes.get('/dsh-delete-turn/state')
+  assert.ok(route, 'the state route must be registered')
+
+  const res = fakeRes()
+  await route.handler(fakeGet(`/dsh-delete-turn/state?sessionId=${SESSION_ID}`), res)
+  const payload = JSON.parse(res.body)
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(payload.hidden, [{ seq: 3, mode: 'message', replacement: 5 }])
+  assert.deepEqual(payload.markerTurns, [2])
+})
+
+test('a legal id with no log is an empty state; a malformed id is refused', async () => {
+  // A session with no events: `harness([])` reads as "no log for this id".
+  const { ctx, calls } = harness([])
+  apply(ctx)
+  const route = calls.routes.get('/dsh-delete-turn/state')
+  assert.ok(route, 'the state route must be registered')
+
+  const empty = fakeRes()
+  await route.handler(fakeGet(`/dsh-delete-turn/state?sessionId=${SESSION_ID}`), empty)
+  // An EMPTY session, not a failure: the panel loads and offers nothing to
+  // delete, instead of printing "状态加载失败，稍后重试。".
+  assert.equal(empty.statusCode, 200)
+  const payload = JSON.parse(empty.body)
+  assert.equal(payload.ok, true)
+  assert.deepEqual(payload.replyTurns, [])
+  assert.deepEqual(payload.turnSeqs, [])
+  assert.equal(payload.busy, false)
+
+  // A NAMED session is a session: DSH ids are opaque (`z.string().min(1)`) and
+  // the GUI creates ids like this one.
+  const named = fakeRes()
+  await route.handler(fakeGet('/dsh-delete-turn/state?sessionId=bili-whale'), named)
+  assert.equal(named.statusCode, 200, 'a named session id is well formed')
+
+  // Malformed stays refused - nothing that could leave a path or a URL.
+  for (const bad of ['../etc/passwd', 'a/b', '.hidden', 'has space']) {
+    const malformed = fakeRes()
+    await route.handler(fakeGet('/dsh-delete-turn/state?sessionId=' + encodeURIComponent(bad)), malformed)
+    assert.equal(malformed.statusCode, 400, JSON.stringify(bad) + ' must be refused')
+    assert.equal(JSON.parse(malformed.body).code, 'invalid')
+  }
+})
+
+// --- the turn route ----------------------------------------------------------
+
+// Four closed turns: A, B (with an injected context row), C, D. Deleting turn B
+// shadows only B's live nodes; C and D stay exactly where they are.
+function turnEvents() {
+  const rows = []
+  const push = (seq, type, data, extra) => rows.push({ seq, time: seq + 1, type, data, ...(extra || {}) })
+  const user = (seq, id) => push(seq, 'user/message', { id, role: 'user', content: [{ type: 'text', text: id }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  const context = (seq, id) => push(seq, 'user/message', { id, role: 'user', content: [{ type: 'text', text: id }], source: { kind: 'plugin:dsh-system-prompt' } }, { surfaceOp: 'append' })
+  const reply = (seq, id, turn) => push(seq, 'assistant/message', { turn, step: 1, message: { id, role: 'assistant', content: [{ type: 'text', text: id }], source: { kind: 'model', provider: 'p', model: 'm' } }, stream: [] }, { surfaceOp: 'append' })
+  let seq = 0
+  for (const [turn, prompt, injected] of [[1, 'A', false], [2, 'B', true], [3, 'C', false], [4, 'D', false]]) {
+    push(seq++, 'turn/start', { turn })
+    push(seq++, 'step/start', { turn, step: 1 })
+    user(seq++, `u-${turn}`)
+    if (injected) context(seq++, `ctx-${turn}`)
+    reply(seq++, `a-${turn}`, turn)
+    push(seq++, 'step/end', { turn, step: 1 })
+    push(seq++, 'turn/end', { turn, reason: { kind: 'completed' } })
+  }
+  return rows
+}
+
+// A session whose log grows with every append (the real one's seq contract).
+function turnHarness(events, options = {}) {
+  const calls = { appends: [], routes: new Map() }
+  const log = [...events]
+  const session = {
+    get seq() {
+      return log.length
+    },
+    get surface() {
+      return { nodes: foldSurface(log).nodes }
+    },
+    snapshotEvents() {
+      return log
+    },
+    append(type, data, intent) {
+      if (options.failOn === type) throw new Error('the surface refused')
+      calls.appends.push({ type, data, intent })
+      const landed = { seq: log.length, time: 99, type, data, ...(intent || {}) }
+      log.push(landed)
+      return landed
+    },
+  }
+  const webServer = { register(spec) { calls.routes.set(spec.path, spec); return () => {} } }
+  const ctx = {
+    effect: (fn) => fn(),
+    inject() {},
+    get(name) {
+      if (name === 'webServer') return webServer
+      if (name === 'sessions') return { get: () => session, flush: async () => true }
+      if (name === 'sessionQuery') return { readSession: async () => ({ events: log }) }
+      // `options.stop` builds the session controller the route cancels through;
+      // it receives the live log so a fake stop can close the open turn the way
+      // the real loop does.
+      if (name === 'sessionController' && typeof options.stop === 'function') return options.stop(log, calls)
+      return undefined
+    },
+  }
+  return { ctx, calls, session, log }
+}
+
+async function postDelete(harness, body) {
+  apply(harness.ctx)
+  const route = harness.calls.routes.get('/dsh-delete-turn/delete')
+  assert.ok(route, 'the delete route must be registered')
+  const res = fakeRes()
+  await route.handler(fakeReq(body), res)
+  return { status: res.statusCode, payload: JSON.parse(res.body) }
+}
+
+test('the turn route lands one carrier and leaves the later turns in place', async () => {
+  const events = turnEvents()
+  const harness = turnHarness(events)
+  const before = foldSurface(events).nodes
+  const { status, payload } = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+
+  assert.equal(status, 200)
+  assert.equal(payload.ok, true)
+  assert.deepEqual(before, [2, 3, 8, 9, 10, 15, 16, 21, 22])
+  assert.deepEqual(payload.hidden, [
+    { seq: 8, mode: 'turn' },
+    { seq: 9, mode: 'turn' },
+    { seq: 10, mode: 'turn' },
+  ])
+
+  // Exactly one write: the turn-less carrier. No turn border, no copy of C or D.
+  assert.equal(harness.calls.appends.length, 1)
+  const [carrier] = harness.calls.appends
+  assert.equal(carrier.type, 'user/message')
+  assert.equal(carrier.data.turn, undefined, 'the carrier never opens a turn')
+  assert.deepEqual(carrier.data.source, { kind: 'plugin:dsh-delete-turn', op: 'delete', turn: 2, deletedTurn: 2, deleteIndex: 1 })
+  assert.deepEqual(carrier.intent.surfaceOp, { op: 'replace', startSeq: 8, endSeq: 10 })
+  assert.deepEqual(carrier.intent.sourceEventSeqs, [8, 9, 10])
+  assert.equal(payload.replacementSeq, 25)
+
+  // The folded surface after landing: A, the carrier, then C and D untouched.
+  assert.deepEqual(foldSurface(harness.log).nodes, [2, 3, 25, 15, 16, 21, 22])
+})
+
+test('the turn route refuses a busy session, an unknown mode and the head turn', async () => {
+  const busy = [...turnEvents(), { seq: 99, time: 99, type: 'turn/start', data: { turn: 5 } }]
+  const busyHarness = turnHarness(busy)
+  const refused = await postDelete(busyHarness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+  assert.equal(refused.status, 409)
+  assert.equal(refused.payload.code, 'busy')
+  assert.equal(busyHarness.calls.appends.length, 0, 'a busy session is never written')
+
+  const idleHarness = turnHarness(turnEvents())
+  const invalid = await postDelete(idleHarness, { sessionId: SESSION_ID, mode: 'turnify', turn: 2 })
+  assert.equal(invalid.status, 400)
+  assert.equal(invalid.payload.code, 'invalid')
+  assert.equal(idleHarness.calls.appends.length, 0)
+
+  // This log carries no system head, so turn 1's own prompt IS surface node 0:
+  // a window over it would cover node 0, which is refused.
+  const headHarness = turnHarness(turnEvents())
+  const head = await postDelete(headHarness, { sessionId: SESSION_ID, mode: 'turn', turn: 1 })
+  assert.equal(head.status, 400)
+  assert.equal(head.payload.code, 'not-deletable')
+})
+
+// --- stopping a running turn before deleting --------------------------------
+
+// A busy log whose open turn is turn 5.
+const openTurnLog = () => [...turnEvents(), { seq: 99, time: 99, type: 'turn/start', data: { turn: 5 } }]
+
+test('a running turn is stopped first, then the delete lands', async () => {
+  configureStopWait({ timeoutMs: 2000, pollMs: 10 })
+  try {
+    const cancelled = []
+    const harness = turnHarness(openTurnLog(), {
+      stop: (log) => ({
+        cancel: async (request) => {
+          cancelled.push(request.sessionId)
+          // What the loop does when the abort unwinds: the open turn closes.
+          log.push({ seq: log.length, time: 100, type: 'turn/end', data: { turn: 5 } })
+          return { accepted: true }
+        },
+      }),
+    })
+    const { status, payload } = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+
+    assert.equal(status, 200, JSON.stringify(payload))
+    assert.deepEqual(cancelled, [SESSION_ID], 'the stop goes out under the session id spelled as it arrived')
+    // Exactly one write from the plugin: the carrier. The stop itself appended
+    // nothing - the loop closed its turn.
+    assert.equal(harness.calls.appends.length, 1)
+    assert.equal(harness.calls.appends[0].intent.surfaceOp.op, 'replace')
+  } finally {
+    configureStopWait()
+  }
+})
+
+test('a compaction is never stopped', async () => {
+  const events = [...turnEvents(), { seq: 99, time: 99, type: 'compaction/start', data: { compactionId: 'c1' } }]
+  let cancelCalls = 0
+  const harness = turnHarness(events, {
+    stop: () => ({ cancel: async () => { cancelCalls += 1; return { accepted: true } } }),
+  })
+  const { status, payload } = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+  assert.equal(status, 409)
+  assert.equal(payload.code, 'busy')
+  assert.equal(cancelCalls, 0, 'a compaction bracket has no stop semantics')
+  assert.equal(harness.calls.appends.length, 0)
+})
+
+test('a stop request that is refused keeps the busy refusal', async () => {
+  const harness = turnHarness(openTurnLog(), {
+    stop: () => ({ cancel: async () => { throw new Error('session "x" not found (not attached)') } }),
+  })
+  const { status, payload } = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+  assert.equal(status, 409)
+  assert.equal(payload.code, 'busy')
+  assert.equal(harness.calls.appends.length, 0)
+})
+
+test('a turn that does not stop in time reports stop-timeout', async () => {
+  configureStopWait({ timeoutMs: 120, pollMs: 10 })
+  try {
+    const harness = turnHarness(openTurnLog(), {
+      stop: () => ({ cancel: async () => ({ accepted: true }) }),
+    })
+    const { status, payload } = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+    assert.equal(status, 409)
+    assert.equal(payload.code, 'stop-timeout')
+    assert.equal(harness.calls.appends.length, 0)
+  } finally {
+    configureStopWait()
+  }
+})
+
+test('a refused carrier write is reported as stale and nothing lands', async () => {
+  const harness = turnHarness(turnEvents(), { failOn: 'user/message' })
+  const { status, payload } = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+  assert.equal(status, 409)
+  assert.equal(payload.code, 'stale')
+  assert.equal(harness.calls.appends.length, 0, 'the refused append never counted as landed')
+})
+
+test('the state route advertises the rows the turn route accepts', async () => {
+  const harness = turnHarness(turnEvents())
+  apply(harness.ctx)
+  const stateRoute = harness.calls.routes.get('/dsh-delete-turn/state')
+  assert.ok(stateRoute, 'the state route must be registered')
+  const res = fakeRes()
+  await stateRoute.handler(fakeGet(`/dsh-delete-turn/state?sessionId=${SESSION_ID}`), res)
+  const payload = JSON.parse(res.body)
+  assert.equal(res.statusCode, 200)
+  // The surface is [2, 3, 8, 9, 10, 15, 16, 21, 22]; the live human prompts are
+  // 2 (the first turn, protected), 8, 15 and 21.
+  assert.deepEqual(payload.turnSeqs, [8, 15, 21])
+  for (const seq of payload.turnSeqs) {
+    const accepted = await postDelete(turnHarness(turnEvents()), { sessionId: SESSION_ID, mode: 'turn', seq })
+    assert.equal(accepted.status, 200, `an advertised seq must be accepted: ${seq}`)
+  }
+})
+
+// --- the forced confirmation for a window with foreign content ---------------
+
+// Turn B's injected context row is replaced by a foreign node (readable content
+// from another producer), which lands inside turn B's window.
+function mixedTurnEvents() {
+  return [
+    ...turnEvents(),
+    {
+      seq: 25,
+      time: 25,
+      type: 'user/message',
+      data: { id: 'ctx-foreign', role: 'user', content: [{ type: 'text', text: 'injected by someone else' }], source: { kind: 'plugin:somebody-else' } },
+      surfaceOp: { op: 'replace', startSeq: 9, endSeq: 9 },
+      sourceEventSeqs: [9],
+    },
+  ]
+}
+
+test('a window that would swallow foreign content asks for force first', async () => {
+  const asked = await postDelete(turnHarness(mixedTurnEvents()), { sessionId: SESSION_ID, mode: 'turn', turn: 2 })
+  assert.equal(asked.status, 409)
+  assert.equal(asked.payload.code, 'range-not-clean')
+  assert.equal(asked.payload.details.foreign, 1, 'the route reports how many unrelated nodes it would remove')
+})
+
+test('the same window goes through once the client forces it', async () => {
+  const harness = turnHarness(mixedTurnEvents())
+  const done = await postDelete(harness, { sessionId: SESSION_ID, mode: 'turn', turn: 2, force: true })
+  assert.equal(done.status, 200, JSON.stringify(done.payload))
+  // The one write shadows turn B's prompt, the foreign node and turn B's reply.
+  assert.equal(harness.calls.appends.length, 1)
+  assert.deepEqual(harness.calls.appends[0].intent.sourceEventSeqs, [8, 25, 10])
+  assert.deepEqual(done.payload.hidden.map((item) => item.seq), [8, 25, 10])
+})
