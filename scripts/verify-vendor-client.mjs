@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import assert from 'node:assert/strict'
 const root=join(dirname(fileURLToPath(import.meta.url)),'..')
-const upstream=readFileSync(join(root,'vendor/dsh-delete-turn/src/client.js'),'utf8')
-const bundle=readFileSync(join(root,'client.js'),'utf8')
+// Git may check out these files with CRLF on Windows. Normalize in memory
+// before comparing source blocks; never rewrite the attributed vendor code.
+const normalizeEol = (source) => source.replace(/\r\n/g, '\n')
+const upstream=normalizeEol(readFileSync(join(root,'vendor/dsh-delete-turn/src/client.js'),'utf8'))
+const bundle=normalizeEol(readFileSync(join(root,'client.js'),'utf8'))
 const begin='  factory: (require) => {'
 const start=upstream.indexOf(begin)+begin.length
 const end=upstream.lastIndexOf('\n  },\n})')
