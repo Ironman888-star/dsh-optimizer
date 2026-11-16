@@ -1,4 +1,5 @@
 # DSH 智能优化管家 / DSH Optimizer
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/ironman888-star/dsh-optimizer)
 
 [English](README.en.md) · [安装](docs/install.md) · [升级与恢复](docs/upgrade.md) · [v0.3.6 发布说明](RELEASE_NOTES_v0.3.6.md) · [安全](SECURITY.md) · [隐私](PRIVACY.md)
 
